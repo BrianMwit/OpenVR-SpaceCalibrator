@@ -3,6 +3,7 @@
 #include "Configuration.h"
 #include "EmbeddedFiles.h"
 #include "UserInterface.h"
+#include "VRState.h"
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
@@ -453,6 +454,35 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 		CreateGLFWWindow();
 		InitCalibrator();
 		LoadProfile(CalCtx);
+
+		if (CalCtx.validProfile)
+		{
+			VRState state = VRState::Load();
+			bool hmdFound = false;
+			for (auto &device : state.devices)
+			{
+				if (device.deviceClass == vr::TrackedDeviceClass_HMD &&
+					device.trackingSystem == CalCtx.referenceTrackingSystem)
+				{
+					hmdFound = true;
+					break;
+				}
+			}
+			if (!hmdFound)
+			{
+				for (auto &device : state.devices)
+				{
+					if (device.deviceClass == vr::TrackedDeviceClass_HMD)
+					{
+						std::cout << "Reference HMD (" << CalCtx.referenceTrackingSystem
+							<< ") not found, switching to " << device.trackingSystem << std::endl;
+						LoadProfileForSource(CalCtx, device.trackingSystem);
+						break;
+					}
+				}
+			}
+		}
+
 		RunLoop();
 
 		vr::VR_Shutdown();

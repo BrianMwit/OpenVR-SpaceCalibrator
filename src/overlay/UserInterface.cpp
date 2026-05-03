@@ -681,7 +681,14 @@ void BuildSystemSelection(const VRState &state)
 
 	if (currentReferenceSystem != -1 && currentReferenceSystem < (int) referenceSystems.size())
 	{
-		CalCtx.referenceTrackingSystem = std::string(referenceSystems[currentReferenceSystem]);
+		std::string newReferenceSystem = std::string(referenceSystems[currentReferenceSystem]);
+		if (newReferenceSystem != CalCtx.referenceTrackingSystem)
+		{
+			if (CalCtx.validProfile)
+				SaveProfile(CalCtx);
+			LoadProfileForSource(CalCtx, newReferenceSystem);
+		}
+		CalCtx.referenceTrackingSystem = newReferenceSystem;
 		if (CalCtx.referenceTrackingSystem == CalCtx.targetTrackingSystem)
 			CalCtx.targetTrackingSystem = "";
 	}

@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <cctype>
 
 static picojson::array FloatArray(const float *buf, size_t numFloats)
 {
@@ -319,10 +320,35 @@ static void LogRegistryResult(LSTATUS result)
 
 static const char *RegistryKey = "Software\\OpenVR-SpaceCalibrator";
 
-static std::string ReadRegistryKey()
+static std::string SanitizeRegistryValuePart(const std::string &value)
+{
+	std::string sanitized;
+	sanitized.reserve(value.size());
+
+	for (unsigned char ch : value) {
+		if (std::isalnum(ch) || ch == '-' || ch == '_') {
+			sanitized.push_back(static_cast<char>(ch));
+		} else {
+			sanitized.push_back('_');
+		}
+	}
+
+	return sanitized;
+}
+
+static std::string RegistryValueNameForSource(const std::string &referenceTrackingSystem)
+{
+	if (referenceTrackingSystem.empty()) {
+		return "Config";
+	}
+
+	return "Config_" + SanitizeRegistryValuePart(referenceTrackingSystem);
+}
+
+static std::string ReadRegistryKey(const std::string &valueName = "Config")
 {
 	DWORD size = 0;
-	auto result = RegGetValueA(HKEY_CURRENT_USER_LOCAL_SETTINGS, RegistryKey, "Config", RRF_RT_REG_SZ, 0, 0, &size);
+	auto result = RegGetValueA(HKEY_CURRENT_USER_LOCAL_SETTINGS, RegistryKey, valueName.c_str(), RRF_RT_REG_SZ, 0, 0, &size);
 	if (result != ERROR_SUCCESS) {
 		LogRegistryResult(result);
 		return "";
@@ -331,7 +357,7 @@ static std::string ReadRegistryKey()
 	std::string str;
 	str.resize(size);
 
-	result = RegGetValueA(HKEY_CURRENT_USER_LOCAL_SETTINGS, RegistryKey, "Config", RRF_RT_REG_SZ, 0, &str[0], &size);
+	result = RegGetValueA(HKEY_CURRENT_USER_LOCAL_SETTINGS, RegistryKey, valueName.c_str(), RRF_RT_REG_SZ, 0, &str[0], &size);
 	if (result != ERROR_SUCCESS) {
 		LogRegistryResult(result);
 		return "";
@@ -341,7 +367,7 @@ static std::string ReadRegistryKey()
 	return str;
 }
 
-static void WriteRegistryKey(std::string str)
+static void WriteRegistryKey(std::string str, const std::string &valueName = "Config")
 {
 	HKEY hkey;
 	auto result = RegCreateKeyExA(HKEY_CURRENT_USER_LOCAL_SETTINGS, RegistryKey, 0, REG_NONE, 0, KEY_ALL_ACCESS, 0, &hkey, 0);
@@ -352,7 +378,7 @@ static void WriteRegistryKey(std::string str)
 
 	DWORD size = static_cast<DWORD>(str.size() + 1);
 
-	result = RegSetValueExA(hkey, "Config", 0, REG_SZ, reinterpret_cast<const BYTE*>(str.c_str()), size);
+	result = RegSetValueExA(hkey, valueName.c_str(), 0, REG_SZ, reinterpret_cast<const BYTE*>(str.c_str()), size);
 	if (result != ERROR_SUCCESS) {
 		LogRegistryResult(result);
 	}
@@ -369,7 +395,12 @@ void LoadProfile(CalibrationContext &ctx)
 
 	ctx.validProfile = false;
 
-	auto str = ReadRegistryKey();
+	// Try per-source key first, then fall back to legacy "Config" key
+	std::string valueName = RegistryValueNameForSource(ctx.referenceTrackingSystem);
+	auto str = ReadRegistryKey(valueName);
+	if (str == "" && valueName != "Config") {
+		str = ReadRegistryKey("Config");
+	}
 	if (str == "") {
 		std::cout << "Profile is empty" << std::endl;
 		ctx.Clear();
@@ -379,17 +410,44 @@ void LoadProfile(CalibrationContext &ctx)
 	try {
 		std::stringstream io(str);
 		ParseProfile(ctx, io);
-		std::cout << "Loaded profile" << std::endl;
+		std::cout << "Loaded profile for source: " << ctx.referenceTrackingSystem << std::endl;
 	} catch (const std::runtime_error &e) {
 		std::cerr << "Error loading profile: " << e.what() << std::endl;
 	}
 }
 
+void LoadProfileForSource(CalibrationContext &ctx, const std::string &referenceTrackingSystem)
+{
+	ctx.referenceTrackingSystem = referenceTrackingSystem;
+	ctx.validProfile = false;
+
+	std::string valueName = RegistryValueNameForSource(referenceTrackingSystem);
+	auto str = ReadRegistryKey(valueName);
+	if (str == "" && valueName != "Config") {
+		str = ReadRegistryKey("Config");
+	}
+	if (str == "") {
+		std::cout << "No profile for source: " << referenceTrackingSystem << std::endl;
+		ctx.Clear();
+		ctx.referenceTrackingSystem = referenceTrackingSystem;
+		return;
+	}
+
+	try {
+		std::stringstream io(str);
+		ParseProfile(ctx, io);
+		std::cout << "Loaded profile for source: " << referenceTrackingSystem << std::endl;
+	} catch (const std::runtime_error &e) {
+		std::cerr << "Error loading profile for source " << referenceTrackingSystem << ": " << e.what() << std::endl;
+	}
+}
+
 void SaveProfile(CalibrationContext &ctx)
 {
-	std::cout << "Saving profile to registry" << std::endl;
+	std::string valueName = RegistryValueNameForSource(ctx.referenceTrackingSystem);
+	std::cout << "Saving profile to registry key: " << valueName << std::endl;
 
 	std::stringstream io;
 	WriteProfile(ctx, io);
-	WriteRegistryKey(io.str());
+	WriteRegistryKey(io.str(), valueName);
 }
